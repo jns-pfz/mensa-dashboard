@@ -32,10 +32,11 @@ export function useMenus() {
       .catch(e => { setError(e.message); setLoading(false); });
   }, [currentDate]);
 
-  const allMensas = [
-    ...data.eth.map(m => ({ ...m, source: "ETH" })),
-    ...data.uzh.map(m => ({ ...m, source: "UZH" })),
-  ];
+ // In client/src/hooks/useMenus.js
+    const allMensas = [
+    ...(data.eth || []).map(m => ({ ...m, source: "ETH" })),
+    ...(data.uzh || []).map(m => ({ ...m, source: "UZH" })),
+    ];
 
   const visibleMensas = allMensas.filter(m => !hiddenMensas.has(m.name));
 
