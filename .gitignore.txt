@@ -1,0 +1,13 @@
+# This one line ignores the 5,000+ files in your dependencies
+node_modules/
+
+# Ignores your secret keys
+.env
+
+# Ignores the "build" folder that gets created when you're done
+dist/
+build/
+
+# Ignores system junk
+.DS_Store
+Thumbs.db
