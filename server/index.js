@@ -95,70 +95,137 @@ async function getEthData(dates) {
 const { XMLParser } = require("fast-xml-parser");
 
 const UZH_VENUES = [
-  { id: 509, name: "Mensa UZH Zentrum" },
-  { id: 510, name: "Mensa UZH Irchel" },
-  { id: 529, name: "Mensa UZH Oerlikon" },
+  {
+    name: "Obere Mensa UZH",
+    weeklyUrl: "https://app.food2050.ch/de/v2/zfv/universitat-zurich,campus-zentrum/obere-mensa/mittagsverpflegung/menu/weekly"
+  },
+  {
+    name: "Untere Mensa UZH",
+    weeklyUrl: "https://app.food2050.ch/de/v2/zfv/universitat-zurich,campus-zentrum/untere-mensa/mittagsverpflegung/menu/weekly"
+  },
+  {
+    name: "Platte14 UZH",
+    weeklyUrl: "https://app.food2050.ch/de/v2/zfv/universitat-zurich,platte-14/platte-14/mittagsverpflegung/menu/weekly"
+  },
 ];
 
-async function getUzhData(date) {
-  const fetch = (await import("node-fetch")).default;
-  const parser = new XMLParser();
+async function scrapeFood2050Weekly(browser, venue) {
+  const page = await browser.newPage();
+  try {
+    await page.goto(venue.weeklyUrl, { waitUntil: "networkidle2", timeout: 30000 });
+    await new Promise(r => setTimeout(r, 4000));
 
-  // Figure out which weekday 1–5 the requested date is
-  const d = new Date(date + "T12:00:00");
-  const dayOfWeek = d.getDay(); // 0=Sun, 6=Sat
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    // Weekend — return empty
-    return UZH_VENUES.map(v => ({ id: v.id, name: v.name, days: {} }));
+    const menus = await page.evaluate(() => {
+      const results = [];
+
+      document.querySelectorAll("a[href*='food2050.ch'][href*='/mittagsverpflegung']").forEach(a => {
+        const href = a.href;
+
+        // Extract date from end of URL e.g. .../2026-04-01
+        const dateMatch = href.match(/\/(\d{4}-\d{2}-\d{2})$/);
+        if (!dateMatch) return;
+        const date = dateMatch[1];
+
+        // Dish name is in the first <p> inside the link
+        const name = a.querySelector("p")?.innerText?.trim();
+        if (!name || name.length < 3) return;
+
+        // Skip placeholder entries like "Karfreitag", "Feiertag" etc.
+        if (name.length < 8 && !name.includes(" ")) return;
+
+        // Menu line label: go up to the row div, grab its first <p>
+        // Structure: rowDiv > [labelDiv > p.label, dayCell > a, dayCell > a, ...]
+        // Walk up until we find a sibling that has the label
+        let rowEl = a.parentElement; // the day cell div
+        while (rowEl && !rowEl.previousElementSibling?.querySelector("p")) {
+          rowEl = rowEl.parentElement;
+        }
+        const line = rowEl?.previousElementSibling?.querySelector("p")?.innerText?.trim() ?? "";
+
+        results.push({ date, name, line });
+      });
+
+      return results;
+    });
+
+    // Group by date
+    const days = {};
+    for (const item of menus) {
+      if (!days[item.date]) days[item.date] = [];
+      // Deduplicate — same dish can appear in multiple DOM nodes
+      const exists = days[item.date].some(m => m.name === item.name && m.line === item.line);
+      if (!exists) {
+        days[item.date].push({
+          name: item.name,
+          description: "",
+          line: item.line,
+          image: "",
+          prices: { student: null, internal: null, external: null },
+        });
+      }
+    }
+
+    return days;
+  } catch (err) {
+    console.error(`food2050 scrape failed for ${venue.name}:`, err.message);
+    return {};
+  } finally {
+    await page.close();
   }
+}
 
+async function getUzhData() {
+  const browser = await getBrowser();
   return Promise.all(
     UZH_VENUES.map(async (venue) => {
-      const url = `https://zfv.ch/de/menus/rssMenuPlan?menuId=${venue.id}&type=uzh2&dayOfWeek=${dayOfWeek}`;
-      try {
-        const response = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
-        if (!response.ok) return { id: venue.id, name: venue.name, days: {} };
-
-        const xml = await response.text();
-        const parsed = parser.parse(xml);
-        const items = parsed?.rss?.channel?.item;
-        if (!items) return { id: venue.id, name: venue.name, days: {} };
-
-        // items can be a single object or array
-        const itemArray = Array.isArray(items) ? items : [items];
-
-        const menus = itemArray.map(item => {
-          // Title format: "MENU NAME | Ingredients"
-          const titleRaw = item.title?.toString() ?? "";
-          const [name, ...rest] = titleRaw.split("|");
-          const description = item.description?.toString().replace(/<[^>]+>/g, "").trim() ?? rest.join("|").trim();
-
-          return {
-            name: name.trim(),
-            description,
-            line: "",
-            image: "",
-            prices: { student: null, internal: null, external: null },
-          };
-        }).filter(m => m.name.length > 0);
-
-        return { id: venue.id, name: venue.name, days: { [date]: menus }, source: "UZH" };
-      } catch (err) {
-        console.error(`UZH fetch failed for ${venue.name}:`, err.message);
-        return { id: venue.id, name: venue.name, days: {} };
-      }
+      const days = await scrapeFood2050Weekly(browser, venue);
+      return { name: venue.name, days, source: "UZH" };
     })
   );
 }
+
+app.get("/api/debug-uzh", async (req, res) => {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.goto("https://app.food2050.ch/de/v2/zfv/universitat-zurich,campus-zentrum/obere-mensa/mittagsverpflegung/menu/weekly", {
+    waitUntil: "networkidle2", timeout: 30000
+  });
+  await new Promise(r => setTimeout(r, 4000));
+  const html = await page.content();
+  await page.close();
+  res.send(html);
+});
+
+app.get("/api/debug-uzh2", async (req, res) => {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.goto("https://app.food2050.ch/de/v2/zfv/universitat-zurich,campus-zentrum/untere-mensa", {
+    waitUntil: "networkidle2", timeout: 30000
+  });
+  await new Promise(r => setTimeout(r, 3000));
+  const html = await page.content();
+  await page.close();
+  res.send(html);
+});
+
+app.get("/api/debug-uzh3", async (req, res) => {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.goto("https://app.food2050.ch/de/v2/zfv/universitat-zurich,campus-zentrum/platte-14", {
+    waitUntil: "networkidle2", timeout: 30000
+  });
+  await new Promise(r => setTimeout(r, 3000));
+  const html = await page.content();
+  await page.close();
+  res.send(html);
+});
 
 app.get("/api/all", async (req, res) => {
   const date = req.query.date || new Date().toISOString().split("T")[0];
   const dates = getWeekDates(date);
   const [ethData, uzhData] = await Promise.allSettled([
     getEthData(dates),
-    getUzhData(date),
+    getUzhData(),   // ← no argument needed anymore
   ]);
   res.json({
     eth: ethData.status === "fulfilled" ? ethData.value : [],
