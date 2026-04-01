@@ -1,0 +1,20 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #f4f1eb;
+  --surface: #ffffff;
+  --border: #e0dbd0;
+  --text: #1a1a1a;
+  --muted: #888;
+  --accent: #c0392b;
+  --accent-light: #fdecea;
+  --radius: 10px;
+  --font: 'Segoe UI', system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
