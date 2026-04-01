@@ -1,5 +1,7 @@
 # This one line ignores the 5,000+ files in your dependencies
 node_modules/
+server/node_modules/
+server/cache/
 
 # Ignores your secret keys
 .env
